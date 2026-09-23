@@ -1,0 +1,8 @@
+node_modules/
+test/capturas/
+*.env
+.env*
+*.jks
+*.keystore
+key.properties
+.DS_Store
