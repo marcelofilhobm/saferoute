@@ -26,7 +26,7 @@ js/core.js     ← núcleo: sem DOM, sem rede. Toda regra de decisão mora aqui.
 js/rede.js     ← tudo que sai do aparelho
 js/guarda.js   ← persistência local
 js/app.js      ← interface
-test/core.test.mjs   ← 23 testes (node --test), fixtures reais do Rio
+test/core.test.mjs   ← 30 testes (node --test), fixtures reais do Rio
 test/fumaca.mjs      ← teste de ponta a ponta em Chromium com rede simulada
 docs/          ← plano, custos, decisões
 ```
@@ -53,11 +53,14 @@ Padrão de falha dele: perder convicção e abandonar. Escopo pequeno, coisas qu
 | Extensão do polígono | 20 km | `validaPoligono` (bloqueia) |
 | Perímetro somado por requisição (Valhalla) | ~10 km; usamos 9,5 km | `preFiltraAreas` |
 | Distância da verificação | 150 km | `verifica` em `app.js` |
-| Waypoints no link do Maps | 9 | `deeplinkMaps` |
+| Paradas no link do Maps | 9 | `MAX_PARADAS`, `refinaParadas` |
+| Conferências do caminho do Maps | 4 por verificação | `refinaParadas` |
 
 Área que contém a origem ou o destino **nunca** é enviada como exclusão (o motor não teria como sair nem chegar).
 
 A rota alternativa devolvida pelo motor é **sempre reconferida no aparelho** contra todas as áreas. Nunca prometa desvio sem conferir.
+
+O Maps só recebe paradas. As paradas saem de `refinaParadas`, que confere o caminho mais curto passando por elas (decisão 018). O veredito diz se esse caminho ficou conferido, não garantido ou não conferido — nunca diga que o Maps vai seguir exatamente a rota do app.
 
 ## Regras sobre áreas — valem para todo o projeto
 
