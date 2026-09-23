@@ -26,7 +26,7 @@ js/core.js     ← núcleo: sem DOM, sem rede. Toda regra de decisão mora aqui.
 js/rede.js     ← tudo que sai do aparelho
 js/guarda.js   ← persistência local
 js/app.js      ← interface
-test/core.test.mjs   ← 30 testes (node --test), fixtures reais do Rio
+test/core.test.mjs   ← 36 testes (node --test), fixtures reais do Rio
 test/fumaca.mjs      ← teste de ponta a ponta em Chromium com rede simulada
 docs/          ← plano, custos, decisões
 ```
@@ -55,12 +55,15 @@ Padrão de falha dele: perder convicção e abandonar. Escopo pequeno, coisas qu
 | Distância da verificação | 150 km | `verifica` em `app.js` |
 | Paradas no link do Maps | 9 | `MAX_PARADAS`, `refinaParadas` |
 | Conferências do caminho do Maps | 4 por verificação | `refinaParadas` |
+| Áreas grandes contornadas por pontos | 2 por verificação | `contornaAreasGrandes` |
 
 Área que contém a origem ou o destino **nunca** é enviada como exclusão (o motor não teria como sair nem chegar).
 
 A rota alternativa devolvida pelo motor é **sempre reconferida no aparelho** contra todas as áreas. Nunca prometa desvio sem conferir.
 
 O Maps só recebe paradas. As paradas saem de `refinaParadas`, que confere o caminho mais curto passando por elas (decisão 018). O veredito diz se esse caminho ficou conferido, não garantido ou não conferido — nunca diga que o Maps vai seguir exatamente a rota do app.
+
+Área que não cabe no orçamento de perímetro não vai como exclusão: `contornaAreasGrandes` tenta dar a volta por pontos de passagem (decisão 019). Quando não há desvio, o veredito diz o motivo de verdade (`MOTIVO`) — nunca "não há caminho" se o motor nem foi consultado.
 
 ## Regras sobre áreas — valem para todo o projeto
 

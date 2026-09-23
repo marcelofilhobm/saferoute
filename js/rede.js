@@ -38,10 +38,13 @@ async function comTimeout(url, opts = {}) {
 // do jeito que o Google Maps trata os waypoints do link: é assim que o app
 // confere o caminho que o Maps tende a fazer. As paradas são pontos da própria
 // rota que o motor devolveu — não revelam nada novo.
-export async function calculaRota(origem, destino, excluir = [], paradas = []) {
+// Com tipo 'through', as paradas viram pontos de passagem sem retorno: é assim
+// que o app dá a volta em área grande demais para ir como exclusão. Esses
+// pontos ficam em volta da área, a ~300 m dela.
+export async function calculaRota(origem, destino, excluir = [], paradas = [], tipoParada = 'break') {
   const loc = (p, extra = {}) => ({ lat: +p[0].toFixed(6), lon: +p[1].toFixed(6), ...extra });
   const req = {
-    locations: [loc(origem), ...paradas.map((p) => loc(p, { type: 'break' })), loc(destino)],
+    locations: [loc(origem), ...paradas.map((p) => loc(p, { type: tipoParada })), loc(destino)],
     costing: 'auto',
     directions_type: 'none',
     units: 'kilometers',

@@ -43,28 +43,42 @@ function encode(pts, prec = 6) {
 const desvio = rotaReal.map((p, i) => (i > 300 && i < 400 ? [p[0] + 0.012, p[1]] : p));
 const shapeDesvio = encode(desvio);
 
-let modoMotor = 'normal'; // normal | sem-caminho
+let modoMotor = 'normal'; // normal | sem-caminho | grande-falha
 const pedidos = [];
+let ultimaSegura = desvio; // o que o motor devolveu por último como desvio
+
+const perna = (pts) => ({ shape: encode(pts) });
+const resposta = (legs, km = 34.21) => ({ status: 200, body: { trip: { legs, summary: { length: km, time: 3710 }, status: 0 } } });
 
 function respostaValhalla(url) {
   const q = JSON.parse(new URL(url).searchParams.get('json'));
   pedidos.push(q);
   const excl = !!q.exclude_polygons?.length;
+  const meio = q.locations.slice(1, -1);
+  // Pontos de passagem em volta de área grande: liga tudo em linha reta
+  // (ou, em 'grande-falha', devolve a rota por dentro).
+  if (meio.length && meio[0].type === 'through') {
+    const [o, d] = [q.locations[0], q.locations.at(-1)];
+    const pts = modoMotor === 'grande-falha' ? rotaReal : [o, ...meio, d].map((l) => [l.lat, l.lon]);
+    ultimaSegura = pts;
+    return resposta([perna(pts)], C.comprimentoM(pts) / 1000);
+  }
   if (excl && modoMotor === 'sem-caminho') {
     return { status: 400, body: { error_code: 442, error: 'No path could be found for input', status_code: 400 } };
   }
   // Com paradas (conferência do caminho do Maps): devolve o desvio em pernas,
   // cortado nas paradas — um Maps que obedece às paradas.
-  if (q.locations.length > 2) {
+  if (meio.length) {
+    const rota = ultimaSegura;
     const perto = (l) => {
       let m = Infinity, k = 0;
-      desvio.forEach((p, i) => { const d = C.haversineM([l.lat, l.lon], p); if (d < m) { m = d; k = i; } });
+      rota.forEach((p, i) => { const d = C.haversineM([l.lat, l.lon], p); if (d < m) { m = d; k = i; } });
       return k;
     };
-    const cortes = [0, ...q.locations.slice(1, -1).map(perto), desvio.length - 1];
-    const legs = cortes.slice(1).map((j, k) => ({ shape: encode(desvio.slice(cortes[k], j + 1)) }));
-    return { status: 200, body: { trip: { legs, summary: { length: 34.21, time: 3710 }, status: 0 } } };
+    const cortes = [0, ...meio.map(perto), rota.length - 1];
+    return resposta(cortes.slice(1).map((j, k) => perna(rota.slice(cortes[k], j + 1))));
   }
+  if (excl) ultimaSegura = desvio;
   const shape = excl ? shapeDesvio : shapeReal;
   const km = excl ? 34.21 : 32.614;
   const t = excl ? 3710 : 3282.9;
@@ -144,7 +158,7 @@ ok('nenhum rótulo de área vai para a rede', !JSON.stringify(pedidos).includes(
 modoMotor = 'sem-caminho';
 await page.click('#nova');
 await page.click('#verificar');
-await page.waitForSelector('text=Não há como contornar', { timeout: 15000 });
+await page.waitForSelector('text=Não achei caminho por fora', { timeout: 15000 });
 await mapaOcioso();
 await page.screenshot({ path: `${SAIDA}03-veredito-sem-desvio.png` });
 ok('estado sem desvio', true);
@@ -199,14 +213,39 @@ await page.fill('#in-origem', 'campo grande');
 await page.waitForSelector('#sug-origem:not([hidden]) button');
 ok('sugestões de endereço aparecem', (await page.locator('#sug-origem button').count()) === 2);
 
-// 9. Tema escuro não quebra
+// 9. Área grande demais para o motor: contorno por pontos de passagem
+const meioRota = rotaReal[500];
+const dq = 0.024;
+const areaGrande = {
+  id: 'grande', escopo: 'privada', rotulo: 'Bairro inteiro', severidade: 1, criadaEm: new Date().toISOString(),
+  geometria: [[meioRota[0] - dq, meioRota[1] - dq], [meioRota[0] - dq, meioRota[1] + dq], [meioRota[0] + dq, meioRota[1] + dq], [meioRota[0] + dq, meioRota[1] - dq]],
+};
+await page.evaluate((a) => localStorage.setItem('contorno.v1', JSON.stringify({ areas: [a], exemploCarregado: true })), areaGrande);
+pedidos.length = 0;
+await page.goto(`${BASE}?text=${encodeURIComponent(URL_REAL)}`);
+await page.waitForSelector('#folha .selo', { timeout: 15000 });
+await mapaOcioso();
+await page.screenshot({ path: `${SAIDA}09-area-grande.png` });
+ok('área grande: acha desvio por pontos de passagem', await page.isVisible('text=Dá para desviar'), await page.textContent('#folha .titulo'));
+ok('área grande: nunca vai como exclusão', pedidos.every((p) => !p.exclude_polygons));
+ok('área grande: pediu pontos de passagem', pedidos.some((p) => p.locations.some((l) => l.type === 'through')));
+
+modoMotor = 'grande-falha';
+await page.goto(`${BASE}?text=${encodeURIComponent(URL_REAL)}`);
+await page.waitForSelector('#folha .selo', { timeout: 15000 });
+await page.screenshot({ path: `${SAIDA}10-area-grande-sem-desvio.png` });
+const sub = await page.textContent('#folha .sub');
+ok('área grande sem desvio: diz o motivo de verdade', /grande demais/.test(sub) && !/Não há caminho/.test(sub), sub.slice(0, 80));
+modoMotor = 'normal';
+
+// 10. Tema escuro não quebra
 await page.emulateMedia({ colorScheme: 'dark' });
 await page.goto(BASE);
 await page.waitForSelector('#folha .rotulo-sec');
 await page.waitForTimeout(500);
 await page.screenshot({ path: `${SAIDA}07-escuro.png` });
 
-// 10. Largura de desktop
+// 11. Largura de desktop
 await page.setViewportSize({ width: 1280, height: 800 });
 await page.emulateMedia({ colorScheme: 'light' });
 await page.goto(`${BASE}?text=${encodeURIComponent(URL_REAL)}`);

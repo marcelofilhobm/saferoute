@@ -482,6 +482,33 @@ function linhaAtingida(at) {
     <div class="d">${fmtM(at.metrosDentro)}</div></div>`;
 }
 
+// Por que não houve desvio, com o motivo de verdade (core.MOTIVO).
+function motivoSemDesvio(v, destinoNome) {
+  const tipo = v.erroSeg?.tipo;
+  if (tipo === 'rede' || tipo === 'servidor') {
+    return `A rota direta cruza suas áreas, mas não consegui calcular o desvio agora (${esc(v.erroSeg.message)}). Tente de novo em instantes.`;
+  }
+  if (tipo === 'limite') {
+    return 'As áreas do caminho são grandes demais para o serviço de rotas calcular o desvio. Áreas menores funcionam melhor.';
+  }
+  switch (v.motivo?.tipo) {
+    case C.MOTIVO.GRANDE: {
+      const a = v.motivo.areas[0];
+      const km = fmtKm(C.perimetroM(a.geometria) / 1000);
+      return `<b>${esc(C.nomeExibicao(a))}</b> é grande demais para o serviço de rotas gratuito desviar sozinho ` +
+        `(contorno de ${km} km; ele aceita até ${fmtKm(C.LIMITES.orcamentoPerimetroM / 1000)} km somando as áreas). ` +
+        'Tentei dar a volta por fora com pontos de passagem e não achei caminho que ficasse fora. ' +
+        'Marcar só o trecho que você evita, em áreas menores, funciona melhor.';
+    }
+    case C.MOTIVO.PONTA:
+      return 'Sua origem ou seu destino fica dentro de uma área que você evita — não tem como sair ou chegar sem passar por ela.';
+    case C.MOTIVO.MOTOR_CRUZOU:
+      return 'O serviço de rotas só devolveu caminho que ainda passa por dentro. Pode não existir rua por fora, ou o serviço não respeitou a área.';
+    default:
+      return `O serviço de rotas não achou caminho até ${esc(destinoNome)} que fique fora dessas áreas.`;
+  }
+}
+
 // O que o app conseguiu conferir sobre o caminho que o Maps vai fazer.
 function notaConferencia(v) {
   const c = v.conferencia;
@@ -564,16 +591,13 @@ function telaVeredito() {
   } else {
     const m = v.atingimentos.reduce((s, a) => s + a.metrosDentro, 0);
     const tipo = v.erroSeg?.tipo;
-    const motivo = tipo === 'limite'
-      ? 'As áreas do caminho são grandes demais para o cálculo de desvio. Áreas menores funcionam melhor.'
-      : (tipo === 'rede' || tipo === 'servidor')
-        ? `A rota direta cruza suas áreas, mas não consegui calcular o desvio agora (${esc(v.erroSeg.message)}). Tente de novo em instantes.`
-        : `Todas as rotas até ${esc(destinoNome)} passam por dentro. Não há caminho por fora.`;
+    const falhaRede = tipo === 'rede' || tipo === 'servidor';
+    const naPonta = v.motivo?.tipo === C.MOTIVO.PONTA;
     html = `
-      <span class="selo grave">${tipo === 'rede' || tipo === 'servidor' ? 'desvio indisponível' : 'sem desvio'}</span>
-      <h2 class="titulo">${tipo === 'rede' || tipo === 'servidor' ? 'Sua rota cruza áreas suas' : 'Não há como contornar'}</h2>
-      <p class="sub">${motivo}</p>
-      ${avisoPonta}
+      <span class="selo grave">${falhaRede ? 'desvio indisponível' : 'sem desvio'}</span>
+      <h2 class="titulo">${falhaRede ? 'Sua rota cruza áreas suas' : naPonta ? 'Não há como contornar' : 'Não achei caminho por fora'}</h2>
+      <p class="sub">${motivoSemDesvio(v, destinoNome)}</p>
+      ${naPonta ? '' : avisoPonta}
       <dl class="custo">
         <div><dt>Dentro de áreas</dt><dd>${fmtM(m)}</dd></div>
         <div><dt>Trajeto</dt><dd>${fmtKm(v.base.km)}<small>km</small></dd></div>
@@ -648,6 +672,20 @@ async function verifica() {
           // "sem alternativa" com o motivo, em vez de perder o resultado.
           erroSeg = e;
         }
+      }
+      // Área grande demais para ir como exclusão: tenta dar a volta nela
+      // por pontos de passagem (decisão 019).
+      const grandes = pf.deixadasDeFora.filter((a) => C.rotaAtinge((segura || base).pontos, a));
+      if (grandes.length && !erroSeg) {
+        S.etapa = 'Procurando caminho em volta das áreas grandes';
+        render();
+        const r = await C.contornaAreasGrandes({
+          rota: segura || base, grandes,
+          calcula: (vias) => calculaRota(o, d, pf.enviadas, vias, 'through'),
+        });
+        if (r?.rota) segura = r.rota;
+        // Falha de rede/servidor não é "não achei caminho": o veredito diz que não conseguiu.
+        else if (r?.erro && (r.erro.tipo === 'rede' || r.erro.tipo === 'servidor')) erroSeg = r.erro;
       }
     }
 

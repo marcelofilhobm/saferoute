@@ -159,8 +159,8 @@ export function validaPoligono(poly) {
   if (per > LIMITES.orcamentoPerimetroM) {
     avisos.push(
       `Área grande para desvio automático (contorno de ${(per / 1000).toFixed(1)} km). ` +
-      'O app avisa quando a rota cruzar, mas pode não conseguir calcular o caminho por fora. ' +
-      'Áreas menores funcionam melhor.'
+      'Ela é grande demais para o serviço de rotas desviar sozinho: o app tenta dar a volta por fora ' +
+      'com pontos de passagem, o que nem sempre dá certo. Áreas menores funcionam melhor.'
     );
   }
   return { erros, avisos };
@@ -586,6 +586,26 @@ export const ESTADO = Object.freeze({
   FALHA: 'falha',
 });
 
+// Por que não houve desvio — o veredito nunca diz "não há caminho" quando o
+// motor nem foi consultado.
+export const MOTIVO = Object.freeze({
+  GRANDE: 'grande',             // área grande demais para o motor; contorno por pontos falhou
+  PONTA: 'ponta',               // origem ou destino dentro da área
+  MOTOR_CRUZOU: 'motor-cruzou', // o motor devolveu caminho que ainda passa por dentro
+  SEM_CAMINHO: 'sem-caminho',   // o motor não achou caminho por fora
+});
+
+function motivoSemDesvio({ origem, destino, atingBase, deixadasDeFora, seguraCruzou }) {
+  const fora = new Set(deixadasDeFora.map((a) => a.id));
+  const grandes = atingBase.filter((at) => fora.has(at.area.id)).map((at) => at.area);
+  if (grandes.length) return { tipo: MOTIVO.GRANDE, areas: grandes };
+  if (origem && destino && atingBase.some((at) =>
+    pontoEmPoligono(origem, at.area.geometria) || pontoEmPoligono(destino, at.area.geometria))) {
+    return { tipo: MOTIVO.PONTA };
+  }
+  return { tipo: seguraCruzou ? MOTIVO.MOTOR_CRUZOU : MOTIVO.SEM_CAMINHO };
+}
+
 // base e segura: { pontos, km, min } | null
 export function montaVeredito({ origem, destino, base, segura, areas, deixadasDeFora = [] }) {
   const atingBase = atingimentosDaRota(base.pontos, areas);
@@ -593,7 +613,8 @@ export function montaVeredito({ origem, destino, base, segura, areas, deixadasDe
     return { estado: ESTADO.LIMPA, base, segura: null, atingimentos: [], restantes: [], waypoints: [] };
   }
   if (!segura) {
-    return { estado: ESTADO.SEM_ALTERNATIVA, base, segura: null, atingimentos: atingBase, restantes: atingBase, waypoints: [], deixadasDeFora };
+    const motivo = motivoSemDesvio({ origem, destino, atingBase, deixadasDeFora, seguraCruzou: false });
+    return { estado: ESTADO.SEM_ALTERNATIVA, base, segura: null, atingimentos: atingBase, restantes: atingBase, waypoints: [], deixadasDeFora, motivo };
   }
   // A rota "segura" é SEMPRE conferida localmente contra todas as áreas —
   // o motor pode ter recebido só parte delas (orçamento de perímetro).
@@ -608,7 +629,139 @@ export function montaVeredito({ origem, destino, base, segura, areas, deixadasDe
   if (mSeg < mBase * 0.8) {
     return { estado: ESTADO.PARCIAL, base, segura, atingimentos: atingBase, restantes: atingSeg, waypoints, deixadasDeFora };
   }
-  return { estado: ESTADO.SEM_ALTERNATIVA, base, segura: null, atingimentos: atingBase, restantes: atingBase, waypoints: [], deixadasDeFora };
+  const motivo = motivoSemDesvio({ origem, destino, atingBase, deixadasDeFora, seguraCruzou: true });
+  return { estado: ESTADO.SEM_ALTERNATIVA, base, segura: null, atingimentos: atingBase, restantes: atingBase, waypoints: [], deixadasDeFora, motivo };
+}
+
+// ------------------------------------------- áreas grandes demais
+
+// O Valhalla público só aceita ~10 km de contorno somado por pedido. Área
+// maior não vai como exclusão: o app tenta dar a volta nela por pontos de
+// passagem, um lado de cada vez, e fica com o lado que passa por fora.
+
+function projecaoLocal(pts) {
+  const lat0 = pts.reduce((s, p) => s + p[0], 0) / pts.length;
+  const lon0 = pts.reduce((s, p) => s + p[1], 0) / pts.length;
+  const k = Math.cos(rad(lat0)) * 111320;
+  return {
+    xy: ([la, lo]) => [(lo - lon0) * k, (la - lat0) * 110540],
+    ll: ([x, y]) => [lat0 + y / 110540, lon0 + x / k],
+  };
+}
+
+// Casco convexo (cadeia monótona), sentido anti-horário.
+function cascoConvexo(pts) {
+  const p = [...pts].sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  if (p.length < 3) return p;
+  const cruz = (o, a, b) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+  const baixo = [], cima = [];
+  for (const q of p) {
+    while (baixo.length >= 2 && cruz(baixo.at(-2), baixo.at(-1), q) <= 0) baixo.pop();
+    baixo.push(q);
+  }
+  for (const q of p.reverse()) {
+    while (cima.length >= 2 && cruz(cima.at(-2), cima.at(-1), q) <= 0) cima.pop();
+    cima.push(q);
+  }
+  return [...baixo.slice(0, -1), ...cima.slice(0, -1)];
+}
+
+// Os dois jeitos de dar a volta na área a partir de onde a rota entra até
+// onde sai, `folgaM` para fora do casco convexo da área.
+export function ladosDoContorno(geometria, rota, { folgaM = 300 } = {}) {
+  if (geometria.length < 3 || rota.length < 2) return null;
+  const { xy, ll } = projecaoLocal(geometria);
+  const casco = cascoConvexo(geometria.map(xy));
+  if (casco.length < 3) return null;
+  const n = casco.length;
+  const normal = (a, b) => { const dx = b[0] - a[0], dy = b[1] - a[1], l = Math.hypot(dx, dy) || 1; return [dy / l, -dx / l]; };
+  const anel = casco.map((v, i) => {
+    const n1 = normal(casco[(i - 1 + n) % n], v);
+    const n2 = normal(v, casco[(i + 1) % n]);
+    const bx = n1[0] + n2[0], by = n1[1] + n2[1], bl = Math.hypot(bx, by) || 1;
+    const d = folgaM / Math.max(0.3, (bx * n1[0] + by * n1[1]) / bl);
+    return [v[0] + (bx / bl) * d, v[1] + (by / bl) * d];
+  });
+
+  // Onde a rota entra e sai do anel folgado.
+  const anelLL = anel.map(ll);
+  const dentro = amostraAoLongo(rota, 50).filter((p) => pontoEmPoligono(p, anelLL));
+  if (!dentro.length) return null;
+
+  const segs = anel.map((a, i) => [a, anel[(i + 1) % n]]);
+  const acum = [0];
+  segs.forEach(([a, b]) => acum.push(acum.at(-1) + Math.hypot(b[0] - a[0], b[1] - a[1])));
+  const P = acum.at(-1);
+  const posicaoNoAnel = (p) => {
+    let melhor = { d: Infinity, s: 0 };
+    segs.forEach(([a, b], i) => {
+      const dx = b[0] - a[0], dy = b[1] - a[1];
+      const t = Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / (dx * dx + dy * dy || 1)));
+      const d = Math.hypot(p[0] - a[0] - t * dx, p[1] - a[1] - t * dy);
+      if (d < melhor.d) melhor = { d, s: acum[i] + t * (acum[i + 1] - acum[i]) };
+    });
+    return melhor.s;
+  };
+  const pontoNoAnel = (s) => {
+    s = ((s % P) + P) % P;
+    let i = 0;
+    while (i < n - 1 && acum[i + 1] < s) i++;
+    const [a, b] = segs[i];
+    const t = (s - acum[i]) / ((acum[i + 1] - acum[i]) || 1);
+    return ll([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]);
+  };
+
+  const sE = posicaoNoAnel(xy(dentro[0]));
+  const sX = posicaoNoAnel(xy(dentro.at(-1)));
+  const ida = ((sX - sE) % P + P) % P || P / 2;
+  const volta = P - ida;
+  // Cada lado: ponto de entrada, os cantos do anel no caminho, ponto de saída.
+  // Ligar cantos vizinhos segue a borda do anel, que fica toda por fora.
+  const lado = (sentido, comprimento) => {
+    const cantos = anel
+      .map((v, i) => ({ v, off: (((acum[i] - sE) * sentido) % P + P) % P }))
+      .filter((c) => c.off > 1 && c.off < comprimento - 1)
+      .sort((a, b) => a.off - b.off)
+      .map((c) => ll(c.v));
+    const passo = Math.max(1, Math.ceil(cantos.length / MAX_CANTOS));
+    return [pontoNoAnel(sE), ...cantos.filter((_, i) => i % passo === 0), pontoNoAnel(sX)];
+  };
+  return [lado(1, ida), lado(-1, volta)];
+}
+const MAX_CANTOS = 5;
+
+// `calcula(vias)` é injetada e devolve { pontos, km, min }. Tenta os dois
+// lados de cada área grande (até `maxAreas`), fica com o mais curto que passa
+// por fora. Devolve { rota, vias }; { erro } se nenhum lado serviu e algum
+// pedido falhou (rede, servidor ocupado); null se o motor respondeu e nenhum
+// lado ficou fora.
+export async function contornaAreasGrandes({ rota, grandes, calcula, maxAreas = 2 }) {
+  let atual = rota;
+  let grupos = []; // um grupo de pontos por área, na ordem em que a rota passa
+  const posicao = (p) => {
+    let m = Infinity, k = 0;
+    rota.pontos.forEach((q, i) => { const d = haversineM(p, q); if (d < m) { m = d; k = i; } });
+    return k;
+  };
+  const vias = (gs) => gs.flatMap((g) => g.pts);
+  let erro = null;
+
+  for (const area of grandes.slice(0, maxAreas)) {
+    if (!rotaAtinge(atual.pontos, area)) continue;
+    const lados = ladosDoContorno(area.geometria, atual.pontos);
+    if (!lados) continue;
+    let melhor = null;
+    for (const lado of lados) {
+      const tentativa = [...grupos, { k: posicao(lado[0]), pts: lado }].sort((a, b) => a.k - b.k);
+      let r;
+      try { r = await calcula(vias(tentativa)); } catch (e) { erro = e; continue; }
+      if (rotaAtinge(r.pontos, area)) continue;
+      if (!melhor || r.km < melhor.r.km) melhor = { r, grupos: tentativa };
+    }
+    if (melhor) { atual = melhor.r; grupos = melhor.grupos; }
+  }
+  if (grupos.length) return { rota: atual, vias: vias(grupos) };
+  return erro ? { erro } : null;
 }
 
 // ---------------------------------------------------- vocabulário
