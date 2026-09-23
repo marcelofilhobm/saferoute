@@ -41,6 +41,7 @@ const S = {
   veredito: null,
   erro: null,
   mensagem: null,
+  etapa: null,           // texto da tela "calculando"
 };
 
 G.carrega();
@@ -190,6 +191,24 @@ function atualizaRotasNoMapa() {
     if (v.segura) feats.push({ type: 'Feature', properties: { tipo: 'segura' }, geometry: { type: 'LineString', coordinates: v.segura.pontos.map(lonlat) } });
   }
   src.setData({ type: 'FeatureCollection', features: feats });
+  atualizaParadasNoMapa();
+}
+
+// Paradas com as mesmas letras que o Maps mostra (A, B, C...), para comparar.
+const letraParada = (i) => String.fromCharCode(65 + i);
+let marcasParadas = [];
+function atualizaParadasNoMapa() {
+  marcasParadas.forEach((m) => m.remove());
+  marcasParadas = [];
+  const v = S.veredito;
+  if (S.modo !== 'veredito' || !v?.segura) return;
+  (v.waypoints || []).forEach((p, i) => {
+    const el = document.createElement('div');
+    el.className = 'parada';
+    el.textContent = letraParada(i);
+    el.setAttribute('aria-label', `Parada ${letraParada(i)}`);
+    marcasParadas.push(new maplibregl.Marker({ element: el }).setLngLat(lonlat(p)).addTo(mapa));
+  });
 }
 
 function atualizaRascunhoNoMapa() {
@@ -450,7 +469,7 @@ function telaCalculando() {
   folha.innerHTML = `
     <p class="rotulo-sec">Verificando</p>
     <div class="carregando"><span class="giro" aria-hidden="true"></span>
-      <div><div style="font-weight:600">Calculando a rota e o desvio</div>
+      <div><div style="font-weight:600">${esc(S.etapa || 'Calculando a rota e o desvio')}</div>
       <div style="font-size:13px;color:var(--ink-3)">Conferindo contra ${areasAtivas().length} ${areasAtivas().length === 1 ? 'área' : 'áreas'} suas</div></div>
     </div>`;
 }
@@ -461,6 +480,28 @@ function linhaAtingida(at) {
     <div class="corpo"><div class="n">${esc(C.nomeExibicao(at.area))}</div>
     <div class="m">${oficial ? esc(at.area.fonte || 'Camada oficial') : 'Minha camada'}</div></div>
     <div class="d">${fmtM(at.metrosDentro)}</div></div>`;
+}
+
+// O que o app conseguiu conferir sobre o caminho que o Maps vai fazer.
+function notaConferencia(v) {
+  const c = v.conferencia;
+  if (!c) return '';
+  const k = v.waypoints.length;
+  const paradas = k === 0 ? '' : k === 1 ? 'pela parada A' : `pelas ${k} paradas (A a ${letraParada(k - 1)})`;
+  const nota = (tipo, sig, texto) => `<div class="nota ${tipo}" style="margin-bottom:12px"><span class="sig">${sig}</span><span>${texto}</span></div>`;
+  if (c.conferencia === C.CONFERENCIA.CONFERIDA) {
+    return nota('', '✓', k
+      ? `Conferido: passando ${paradas}, o caminho mais curto fica fora das suas áreas. O Maps usa o trânsito e pode variar um pouco entre as paradas.`
+      : 'Conferido: o caminho do Maps fica fora das áreas que esta alternativa evita.');
+  }
+  if (c.conferencia === C.CONFERENCIA.NAO_GARANTIDA) {
+    const nomes = [...new Set((c.entradas || []).map((e) => C.nomeExibicao(e.area)))];
+    const onde = `<b>${esc(nomes.join(', ') || 'uma área sua')}</b>`;
+    return nota('aviso', '!', k
+      ? `Mesmo passando ${paradas}, o caminho mais curto entre elas ainda pode passar por ${onde}. No Maps, confira esse trecho e siga o traçado do app.`
+      : `Não achei como indicar este desvio ao Maps: sem paradas, ele faria a rota direta, que passa por ${onde}. Siga o traçado do app nesse trecho.`);
+  }
+  return nota('aviso', 'i', 'Não consegui conferir agora o caminho que o Maps vai fazer. No Maps, confira o trecho perto das suas áreas.');
 }
 
 function telaVeredito() {
@@ -498,6 +539,7 @@ function telaVeredito() {
     const dKm = v.segura.km - v.base.km;
     const mapsDesvio = C.deeplinkMaps(S.origem.ponto, S.destino.ponto, v.waypoints);
     const n = v.atingimentos.length;
+    const notaMaps = notaConferencia(v);
     html = `
       <span class="selo alerta">${n} ${n === 1 ? 'área' : 'áreas'} no caminho</span>
       <h2 class="titulo">${parcial ? 'Dá para desviar de parte' : 'Dá para desviar'}</h2>
@@ -513,6 +555,7 @@ function telaVeredito() {
       <p class="rotulo-sec">Rota direta atravessa</p>
       <div class="atingidas">${v.atingimentos.map(linhaAtingida).join('')}</div>
       ${parcial ? `<p class="rotulo-sec">A alternativa ainda passa por</p><div class="atingidas">${v.restantes.map(linhaAtingida).join('')}</div>` : ''}
+      ${notaMaps}
       <div class="pilha">
         <a class="btn btn-pri" href="${esc(mapsDesvio)}" target="_blank" rel="noopener">${IC.seta}Navegar por fora no Google Maps</a>
         ${wazeBloco}
@@ -610,12 +653,29 @@ async function verifica() {
 
     S.veredito = C.montaVeredito({ origem: o, destino: d, base, segura, areas, deixadasDeFora });
     S.veredito.erroSeg = erroSeg;
+    if (S.veredito.estado === C.ESTADO.COM_ALTERNATIVA || S.veredito.estado === C.ESTADO.PARCIAL) {
+      // O Maps só recebe paradas: confere o caminho que ele tende a fazer por elas.
+      S.etapa = 'Conferindo o caminho que o Maps vai fazer';
+      render();
+      try {
+        const r = await C.refinaParadas({
+          segura, base, areas,
+          simula: (paradas) => calculaRota(o, d, [], paradas),
+        });
+        S.veredito.waypoints = r.paradas;
+        S.veredito.conferencia = r;
+      } catch {
+        S.veredito.conferencia = { paradas: S.veredito.waypoints, conferencia: C.CONFERENCIA.NAO_CONFERIDA, entradas: [] };
+      }
+    }
+    S.etapa = null;
     S.modo = 'veredito';
     G.guardaUltimaRota({ origem: S.origem, destino: S.destino });
     render();
     atualizaRotasNoMapa();
     enquadra([...base.pontos, ...(segura?.pontos || [])]);
   } catch (e) {
+    S.etapa = null;
     S.erro = e.message || 'Algo deu errado ao calcular a rota.';
     S.modo = 'rota';
     render();

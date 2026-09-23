@@ -33,13 +33,15 @@ async function comTimeout(url, opts = {}) {
   }
 }
 
-// Devolve { pontos: [[lat,lon]...], km, min }.
-export async function calculaRota(origem, destino, excluir = []) {
+// Devolve { pontos: [[lat,lon]...], km, min, pernas: [{ pontos }] }.
+// `paradas` entram como paradas de verdade (type 'break', permite retorno),
+// do jeito que o Google Maps trata os waypoints do link: é assim que o app
+// confere o caminho que o Maps tende a fazer. As paradas são pontos da própria
+// rota que o motor devolveu — não revelam nada novo.
+export async function calculaRota(origem, destino, excluir = [], paradas = []) {
+  const loc = (p, extra = {}) => ({ lat: +p[0].toFixed(6), lon: +p[1].toFixed(6), ...extra });
   const req = {
-    locations: [
-      { lat: +origem[0].toFixed(6), lon: +origem[1].toFixed(6) },
-      { lat: +destino[0].toFixed(6), lon: +destino[1].toFixed(6) },
-    ],
+    locations: [loc(origem), ...paradas.map((p) => loc(p, { type: 'break' })), loc(destino)],
     costing: 'auto',
     directions_type: 'none',
     units: 'kilometers',
@@ -78,12 +80,11 @@ export async function calculaRota(origem, destino, excluir = []) {
   if (!shape) throw new ErroRota('servidor', 'O serviço de rotas respondeu sem rota.', JSON.stringify(corpo).slice(0, 200));
 
   // Rota com várias pernas: concatena.
-  const pontos = trip.legs.flatMap((l, i) => {
-    const p = decodePolyline(l.shape, 6);
-    return i === 0 ? p : p.slice(1);
-  });
+  const pernas = trip.legs.map((l) => ({ pontos: decodePolyline(l.shape, 6) }));
+  const pontos = pernas.flatMap((l, i) => (i === 0 ? l.pontos : l.pontos.slice(1)));
   return {
     pontos,
+    pernas,
     km: trip.summary.length,
     min: Math.round(trip.summary.time / 60),
   };

@@ -278,3 +278,8 @@ button, input { font: inherit; color: inherit; }
 .pino { width: 18px; height: 18px; border-radius: 50%; box-shadow: 0 1px 4px rgba(0, 0, 0, .35); }
 .pino.o { background: #fff; border: 4px solid #16211e; }
 .pino.d { background: #16211e; border: 4px solid #fff; }
+.parada {
+  width: 22px; height: 22px; border-radius: 50%; background: #fff; border: 2px solid #16211e;
+  color: #16211e; font: 600 12px/18px var(--fonte-dado); text-align: center;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, .35);
+}

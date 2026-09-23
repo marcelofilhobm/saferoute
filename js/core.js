@@ -385,31 +385,175 @@ export function paraExcludePolygons(areas) {
 
 // --------------------------------------- 7.4 waypoints e deeplinks
 
-export function extraiWaypoints(rotaSegura, rotaBase, { quantos = 3, minAfastamentoM = 120 } = {}) {
-  if (rotaSegura.length < 2 || rotaBase.length < 1) return [];
-  const amostras = amostraAoLongo(rotaSegura, 150);
-  // rotaBase pode ter centenas de pontos: densifica pouco para medir distância.
-  const ref = amostraAoLongo(rotaBase, 100);
-  const dists = amostras.map((p) => {
-    let m = Infinity;
-    for (const q of ref) { const d = haversineM(p, q); if (d < m) m = d; }
-    return m;
-  });
-  const picos = [];
-  for (let i = 1; i < dists.length - 1; i++) {
-    if (dists[i] >= dists[i - 1] && dists[i] >= dists[i + 1] && dists[i] > minAfastamentoM) {
-      picos.push({ d: dists[i], i });
+// O Maps não aceita "evite esta área", só paradas. Entre duas paradas ele
+// escolhe o caminho que quiser — por isso as paradas são escolhidas por
+// desvio e depois conferidas (refinaParadas).
+
+export const MAX_PARADAS = 9; // teto do link do Maps (decisão 018)
+const PASSO_AMOSTRA_M = 150;
+const MIN_AFASTAMENTO_M = 120;
+const FOLGA_PONTA_M = 200;    // parada colada na origem, destino ou noutra parada não serve
+
+// Amostras da rota segura com a distância acumulada (s, em metros).
+function trilho(rota) {
+  const pts = amostraAoLongo(rota, PASSO_AMOSTRA_M);
+  const s = [0];
+  for (let i = 1; i < pts.length; i++) s.push(s[i - 1] + haversineM(pts[i - 1], pts[i]));
+  return { pts, s, total: s.at(-1) };
+}
+
+const RAIO_RETORNO_M = 1000;
+const EXCESSO_RETORNO_M = 600;
+
+// Quanto da linha (já densificada) fica a até `raio` metros do centro.
+function comprimentoNoRaio(linha, centro, raio) {
+  let m = 0;
+  for (let i = 0; i < linha.length - 1; i++) {
+    if (haversineM(linha[i], centro) <= raio && haversineM(linha[i + 1], centro) <= raio) {
+      m += haversineM(linha[i], linha[i + 1]);
     }
   }
-  picos.sort((a, b) => b.d - a.d);
-  const escolhidos = [];
-  const sep = amostras.length * 0.12;
-  for (const p of picos) {
-    if (escolhidos.every((j) => Math.abs(p.i - j) > sep)) escolhidos.push(p.i);
-    if (escolhidos.length === quantos) break;
+  return m;
+}
+
+function distAteLinha(p, ref) {
+  let m = Infinity;
+  for (const q of ref) { const d = haversineM(p, q); if (d < m) m = d; }
+  return m;
+}
+
+// Uma parada por "barriga": cada trecho contínuo em que a rota segura se
+// afasta da direta ganha uma parada no ponto mais afastado.
+// Devolve âncoras { ponto, s, s0 } em ordem ao longo da rota segura.
+export function ancorasIniciais(rotaSegura, rotaBase, { max = MAX_PARADAS, minAfastamentoM = MIN_AFASTAMENTO_M } = {}) {
+  if (rotaSegura.length < 2 || rotaBase.length < 1) return [];
+  const t = trilho(rotaSegura);
+  // rotaBase pode ter centenas de pontos: densifica pouco para medir distância.
+  const ref = amostraAoLongo(rotaBase, 100);
+  const dists = t.pts.map((p) => distAteLinha(p, ref));
+  const picos = [];
+  let pico = null;
+  for (let i = 0; i < dists.length; i++) {
+    if (dists[i] > minAfastamentoM) {
+      if (!pico || dists[i] > pico.d) pico = { i, d: dists[i] };
+    } else if (pico) { picos.push(pico); pico = null; }
   }
-  escolhidos.sort((a, b) => a - b);
-  return escolhidos.map((i) => amostras[i]);
+  if (pico) picos.push(pico);
+  const usados = picos
+    .filter((p) => t.s[p.i] > FOLGA_PONTA_M && t.total - t.s[p.i] > FOLGA_PONTA_M)
+    .sort((a, b) => b.d - a.d)
+    .slice(0, max)
+    .sort((a, b) => a.i - b.i);
+  return usados.map(({ i }) => ({ ponto: t.pts[i], s: t.s[i], s0: t.s[i] }));
+}
+
+export function extraiWaypoints(rotaSegura, rotaBase, opts) {
+  return ancorasIniciais(rotaSegura, rotaBase, opts).map((a) => a.ponto);
+}
+
+// Olha o caminho que um roteador faria passando pelas paradas atuais
+// (simulada: { pernas: [{ pontos }] }, uma perna entre cada par de paradas)
+// e decide o que mudar. Duas falhas:
+//  1. uma perna entra numa área que a rota segura evita → nova parada no
+//     ponto da rota segura mais afastado dessa perna;
+//  2. o caminho dá uma volta grande perto de uma parada (parada presa na
+//     pista errada, retorno) → a parada anda 300 m ao longo da rota.
+// Pura: devolve { ancoras, entradas, retornos, mudou }.
+export function avaliaSimulacao({ segura, ancoras, simulada, areas, max = MAX_PARADAS }) {
+  const t = trilho(segura);
+  const evitadas = areas.filter((a) => !areaExpirada(a) && !rotaAtinge(segura, a));
+  const n = ancoras.length;
+  const cortes = [0, ...ancoras.map((a) => a.s), t.total];
+  const pernas = simulada.pernas?.length === n + 1 ? simulada.pernas : null;
+
+  const entradas = [];
+  const novas = [];
+  if (!pernas) {
+    for (const at of atingimentosDaRota(simulada.pontos || [], evitadas)) entradas.push({ area: at.area, perna: -1 });
+  } else {
+    pernas.forEach((perna, k) => {
+      const ats = atingimentosDaRota(perna.pontos, evitadas);
+      if (!ats.length) return;
+      for (const at of ats) entradas.push({ area: at.area, perna: k });
+      // Ponto da rota segura, dentro deste trecho, mais longe do atalho.
+      const ref = amostraAoLongo(perna.pontos, 100);
+      let melhor = null;
+      for (let i = 0; i < t.pts.length; i++) {
+        if (t.s[i] <= cortes[k] + FOLGA_PONTA_M || t.s[i] >= cortes[k + 1] - FOLGA_PONTA_M) continue;
+        const d = distAteLinha(t.pts[i], ref);
+        if (!melhor || d > melhor.d) melhor = { i, d };
+      }
+      if (melhor && melhor.d > 25) novas.push({ ponto: t.pts[melhor.i], s: t.s[melhor.i], s0: t.s[melhor.i] });
+    });
+  }
+
+  // Retorno: perto da parada, o caminho simulado anda bem mais que a rota
+  // segura (vai além e volta). Medido num raio em volta da parada, para
+  // não confundir com um caminho diferente, porém razoável, entre paradas.
+  const retornos = [];
+  const movidas = ancoras.map((a) => ({ ...a }));
+  const sim = amostraAoLongo(pernas ? pernas.flatMap((p) => p.pontos) : (simulada.pontos || []), 50);
+  const seg = amostraAoLongo(segura, 50);
+  if (sim.length > 1) {
+    for (let j = 0; j < n; j++) {
+      const volta = comprimentoNoRaio(sim, ancoras[j].ponto, RAIO_RETORNO_M) -
+                    comprimentoNoRaio(seg, ancoras[j].ponto, RAIO_RETORNO_M);
+      if (volta <= EXCESSO_RETORNO_M) continue;
+      retornos.push({ parada: j, metros: volta });
+      // Primeiro 300 m para frente; se já andou, 300 m para trás da original.
+      const a = movidas[j];
+      const alvo = a.s === a.s0 ? a.s0 + 300 : (a.s > a.s0 ? a.s0 - 300 : null);
+      if (alvo == null || alvo <= cortes[j] + FOLGA_PONTA_M || alvo >= cortes[j + 2] - FOLGA_PONTA_M) continue;
+      let i = t.s.findIndex((s) => s >= alvo);
+      if (i < 0) i = t.pts.length - 1;
+      movidas[j] = { ponto: t.pts[i], s: t.s[i], s0: a.s0 };
+    }
+  }
+
+  const cabem = novas.slice(0, Math.max(0, max - n));
+  const resultado = [...movidas, ...cabem].sort((a, b) => a.s - b.s);
+  const mudou = cabem.length > 0 || movidas.some((a, j) => a.s !== ancoras[j].s);
+  return { ancoras: resultado, entradas, retornos, mudou };
+}
+
+export const CONFERENCIA = Object.freeze({
+  CONFERIDA: 'conferida',          // o caminho pelas paradas fica fora das áreas
+  NAO_GARANTIDA: 'nao-garantida',  // mesmo ajustando, ainda entra em alguma
+  NAO_CONFERIDA: 'nao-conferida',  // não deu para simular (rede, servidor)
+});
+
+// Escolhe as paradas e confere o caminho que um roteador faria por elas.
+// `simula(paradas)` é injetada (a rede fica fora do núcleo) e devolve
+// { pontos, pernas: [{ pontos }] }.
+export async function refinaParadas({ segura, base, areas, simula, max = MAX_PARADAS, maxSimulacoes = 4 }) {
+  let ancoras = ancorasIniciais(segura.pontos, base.pontos, { max });
+  let conferidas = null; // última combinação simulada que ficou fora das áreas
+  let entradas = [];
+  let simulacoes = 0;
+  const pontos = (as) => as.map((a) => a.ponto);
+  for (;;) {
+    let sim;
+    if (!ancoras.length) {
+      // Sem parada nenhuma o Maps faz a rota direta — já está em mãos.
+      sim = { pontos: base.pontos, pernas: [{ pontos: base.pontos }] };
+    } else {
+      if (simulacoes >= maxSimulacoes) break;
+      simulacoes++;
+      try {
+        sim = await simula(pontos(ancoras));
+      } catch (erro) {
+        if (conferidas) break;
+        return { paradas: pontos(ancoras), conferencia: CONFERENCIA.NAO_CONFERIDA, simulacoes, entradas: [], erro };
+      }
+    }
+    const r = avaliaSimulacao({ segura: segura.pontos, ancoras, simulada: sim, areas, max });
+    entradas = r.entradas;
+    if (!entradas.length) conferidas = ancoras;
+    if ((!entradas.length && !r.retornos.length) || !r.mudou) break;
+    ancoras = r.ancoras;
+  }
+  if (conferidas) return { paradas: pontos(conferidas), conferencia: CONFERENCIA.CONFERIDA, simulacoes, entradas: [] };
+  return { paradas: pontos(ancoras), conferencia: CONFERENCIA.NAO_GARANTIDA, simulacoes, entradas };
 }
 
 const fmt = (p) => `${p[0].toFixed(6)},${p[1].toFixed(6)}`;

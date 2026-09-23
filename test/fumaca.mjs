@@ -53,6 +53,18 @@ function respostaValhalla(url) {
   if (excl && modoMotor === 'sem-caminho') {
     return { status: 400, body: { error_code: 442, error: 'No path could be found for input', status_code: 400 } };
   }
+  // Com paradas (conferência do caminho do Maps): devolve o desvio em pernas,
+  // cortado nas paradas — um Maps que obedece às paradas.
+  if (q.locations.length > 2) {
+    const perto = (l) => {
+      let m = Infinity, k = 0;
+      desvio.forEach((p, i) => { const d = C.haversineM([l.lat, l.lon], p); if (d < m) { m = d; k = i; } });
+      return k;
+    };
+    const cortes = [0, ...q.locations.slice(1, -1).map(perto), desvio.length - 1];
+    const legs = cortes.slice(1).map((j, k) => ({ shape: encode(desvio.slice(cortes[k], j + 1)) }));
+    return { status: 200, body: { trip: { legs, summary: { length: 34.21, time: 3710 }, status: 0 } } };
+  }
   const shape = excl ? shapeDesvio : shapeReal;
   const km = excl ? 34.21 : 32.614;
   const t = excl ? 3710 : 3282.9;
@@ -115,6 +127,11 @@ ok('rota segura desenhada no mapa', desenhadas.segura > 0, JSON.stringify(desenh
 ok('rota direta desenhada no mapa', desenhadas.base > 0);
 const hrefDesvio = await page.getAttribute('a:has-text("Navegar por fora")', 'href');
 ok('deeplink do Maps leva waypoints', /waypoints=/.test(hrefDesvio || ''), hrefDesvio?.slice(0, 90));
+const paradasNoLink = new URL(hrefDesvio).searchParams.get('waypoints')?.split('|').length || 0;
+ok('paradas aparecem no mapa com letras', (await page.locator('.parada').count()) === paradasNoLink, `${paradasNoLink} paradas`);
+ok('caminho do Maps conferido', await page.isVisible('text=Conferido'));
+const conf = pedidos.find((p) => p.locations.length > 2);
+ok('conferência manda paradas como parada, sem áreas', !!conf && conf.locations.slice(1, -1).every((l) => l.type === 'break') && !conf.exclude_polygons);
 ok('aviso do Waze aparece', await page.isVisible('text=O Waze não aceita desvio por área'));
 ok('área própria chamada de "área que eu evito" ou rótulo', !(await page.textContent('#folha')).toLowerCase().includes('área de risco'));
 const excl = pedidos.find((p) => p.exclude_polygons);

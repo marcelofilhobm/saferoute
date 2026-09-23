@@ -88,3 +88,8 @@ Descartado: prometer desvio sem conferir.
 ### 017 — Link curto do Maps fica para o Worker
 `maps.app.goo.gl` só se expande seguindo o redirecionamento, o que o navegador não pode fazer (CORS). Até existir o Worker, o app reconhece o link curto, explica e cai na entrada manual; links longos (`/maps/dir/`, `api=1`) funcionam.
 Descartado: usar serviço público de terceiros para expandir — mandaria a rota do usuário para quem não conhecemos.
+
+### 018 — Paradas do Maps escolhidas por desvio e conferidas
+O Maps só recebe paradas, e entre duas paradas escolhe o caminho que quiser. O app agora põe uma parada em cada trecho em que a rota segura se afasta da direta (até 9, o teto do link) e confere: pede ao motor o caminho mais curto passando por elas, sem as áreas. Se esse caminho entra numa área, ganha parada no trecho; se dá uma volta grande perto de uma parada (retorno), a parada anda 300 m. No máximo 4 conferências; o veredito diz se ficou conferido, não garantido ou não conferido.
+Motivo: teste real do Marcelo (23/09/2026), em que o Maps fez retorno numa parada e cortou caminho por baixo entre outras duas; o critério antigo (3 pontos mais afastados) deixava áreas separadas sem parada. Ele aceitou até 9 paradas.
+Descartado: aumentar o número de pontos sem conferir (mais paradas, mais retornos); navegação dentro do app (fora do escopo). A conferência usa o Valhalla sem trânsito como aproximação do Maps — não garante o trajeto exato.

@@ -158,7 +158,7 @@ test('veredito: com alternativa quando a rota segura passa por fora', () => {
     areas: [a],
   });
   assert.equal(v.estado, C.ESTADO.COM_ALTERNATIVA);
-  assert.ok(v.waypoints.length >= 1 && v.waypoints.length <= 3);
+  assert.ok(v.waypoints.length >= 1 && v.waypoints.length <= C.MAX_PARADAS);
 });
 
 test('veredito: sem alternativa quando o motor não achou caminho', () => {
@@ -180,6 +180,134 @@ test('veredito: rota "segura" que ainda cruza é conferida localmente', () => {
     areas: [area(quadrado(meio[0], meio[1], 0.003))],
   });
   assert.equal(v.estado, C.ESTADO.SEM_ALTERNATIVA, 'não pode prometer desvio que não existe');
+});
+
+// ------------------------------------------------- paradas para o Maps
+
+// Rota segura com várias "barrigas" (trechos empurrados para o norte).
+function comBarrigas(rota, faixas, deslocLat = 0.012) {
+  return rota.map((p, i) => (faixas.some(([a, b]) => i > a && i < b) ? [p[0] + deslocLat, p[1]] : p));
+}
+const indiceMaisPerto = (rota, p) => {
+  let m = Infinity, k = 0;
+  rota.forEach((q, i) => { const d = C.haversineM(p, q); if (d < m) { m = d; k = i; } });
+  return k;
+};
+// Simulador falso do Maps. Segue a rota segura entre as paradas, mas onde uma
+// barriga não tem parada dentro, corta caminho pela rota direta.
+function simuladorQueCorta(segura, base, faixas) {
+  return async (paradas) => {
+    const cortes = [0, ...paradas.map((p) => indiceMaisPerto(segura, p)), segura.length - 1];
+    const pernas = [];
+    for (let k = 0; k < cortes.length - 1; k++) {
+      const [i, j] = [cortes[k], cortes[k + 1]];
+      const semParada = faixas.filter(([a, b]) => i <= a && j >= b);
+      const pts = [];
+      for (let x = i; x <= j; x++) pts.push(semParada.some(([a, b]) => x > a && x < b) ? base[x] : segura[x]);
+      pernas.push({ pontos: pts });
+    }
+    return { pontos: pernas.flatMap((l) => l.pontos), pernas };
+  };
+}
+
+test('paradas: uma por barriga, e passa de 3 quando há mais desvios', () => {
+  const faixas = [[60, 90], [180, 210], [300, 330], [420, 450], [540, 570]];
+  const segura = comBarrigas(rotaReal, faixas);
+  const ancoras = C.ancorasIniciais(segura, rotaReal);
+  assert.ok(ancoras.length >= 5, `paradas: ${ancoras.length}`);
+  faixas.forEach(([a, b], k) => {
+    const trecho = segura.slice(a + 1, b);
+    const perto = ancoras.some((x) => trecho.some((q) => C.haversineM(x.ponto, q) < 100));
+    assert.ok(perto, `barriga ${k} ficou sem parada`);
+  });
+});
+
+test('paradas: nunca passam do teto do Maps', () => {
+  const faixas = Array.from({ length: 12 }, (_, k) => [20 + k * 55, 45 + k * 55]);
+  const ancoras = C.ancorasIniciais(comBarrigas(rotaReal, faixas), rotaReal);
+  assert.equal(ancoras.length, C.MAX_PARADAS);
+});
+
+test('conferência: Maps seguindo as paradas → conferida com uma simulação', async () => {
+  const faixas = [[470, 530], [580, 640]];
+  const segura = comBarrigas(rotaReal, faixas);
+  const areas = [area(quadrado(...rotaReal[500], 0.003)), area(quadrado(...rotaReal[610], 0.002))];
+  const r = await C.refinaParadas({
+    segura: { pontos: segura }, base: { pontos: rotaReal }, areas,
+    simula: simuladorQueCorta(segura, rotaReal, faixas),
+  });
+  assert.equal(r.conferencia, C.CONFERENCIA.CONFERIDA);
+  assert.equal(r.paradas.length, 2);
+  assert.equal(r.simulacoes, 1);
+});
+
+test('conferência: desvio curto sem parada inicial ganha parada e fica conferido', async () => {
+  // Desvio de ~100 m: abaixo do corte das barrigas, então nenhuma parada
+  // inicial — e sem parada o Maps faria a rota direta, por dentro da área.
+  const faixas = [[340, 360]];
+  const segura = comBarrigas(rotaReal, faixas, 0.0009);
+  const areas = [area(quadrado(...rotaReal[350], 0.0003))];
+  assert.equal(C.ancorasIniciais(segura, rotaReal).length, 0);
+  assert.ok(C.rotaAtinge(rotaReal, areas[0]) && !C.rotaAtinge(segura, areas[0]));
+  const r = await C.refinaParadas({
+    segura: { pontos: segura }, base: { pontos: rotaReal }, areas,
+    simula: simuladorQueCorta(segura, rotaReal, faixas),
+  });
+  assert.equal(r.conferencia, C.CONFERENCIA.CONFERIDA);
+  assert.equal(r.paradas.length, 1);
+  const i = indiceMaisPerto(segura, r.paradas[0]);
+  assert.ok(i > 340 && i < 360, `parada fora do desvio (${i})`);
+});
+
+test('conferência: Maps que ignora as paradas → não garantida, com a área e dentro dos limites', async () => {
+  const faixas = [[470, 530]];
+  const segura = comBarrigas(rotaReal, faixas);
+  const a = area(quadrado(...rotaReal[500], 0.003), { rotulo: 'Trecho X' });
+  let chamadas = 0;
+  const r = await C.refinaParadas({
+    segura: { pontos: segura }, base: { pontos: rotaReal }, areas: [a],
+    simula: async () => { chamadas++; return { pontos: rotaReal, pernas: null }; },
+  });
+  assert.equal(r.conferencia, C.CONFERENCIA.NAO_GARANTIDA);
+  assert.equal(r.entradas[0].area.id, a.id);
+  assert.ok(r.paradas.length >= 1 && r.paradas.length <= C.MAX_PARADAS);
+  assert.ok(chamadas <= 4, `simulações: ${chamadas}`);
+});
+
+test('conferência: parada que força retorno é deslocada ao longo da rota', async () => {
+  const faixas = [[470, 530]];
+  const segura = comBarrigas(rotaReal, faixas);
+  const areas = [area(quadrado(...rotaReal[500], 0.003))];
+  const [inicial] = C.ancorasIniciais(segura, rotaReal);
+  const segue = simuladorQueCorta(segura, rotaReal, faixas);
+  const r = await C.refinaParadas({
+    segura: { pontos: segura }, base: { pontos: rotaReal }, areas,
+    simula: async (paradas) => {
+      const sim = await segue(paradas);
+      if (C.haversineM(paradas[0], inicial.ponto) < 1) {
+        // Parada presa na pista errada: vai ~800 m além e volta.
+        const p = sim.pernas[0].pontos.at(-1);
+        sim.pernas[0].pontos.push([p[0] + 0.007, p[1]], p);
+      }
+      return sim;
+    },
+  });
+  assert.equal(r.conferencia, C.CONFERENCIA.CONFERIDA);
+  assert.equal(r.simulacoes, 2);
+  const andou = C.haversineM(r.paradas[0], inicial.ponto);
+  assert.ok(andou > 200 && andou < 450, `parada andou ${andou.toFixed(0)} m`);
+});
+
+test('conferência: falha de rede mantém as paradas e avisa que não conferiu', async () => {
+  const faixas = [[470, 530]];
+  const segura = comBarrigas(rotaReal, faixas);
+  const r = await C.refinaParadas({
+    segura: { pontos: segura }, base: { pontos: rotaReal },
+    areas: [area(quadrado(...rotaReal[500], 0.003))],
+    simula: async () => { throw new Error('sem rede'); },
+  });
+  assert.equal(r.conferencia, C.CONFERENCIA.NAO_CONFERIDA);
+  assert.equal(r.paradas.length, 1);
 });
 
 // ------------------------------------------------------------ deeplinks
