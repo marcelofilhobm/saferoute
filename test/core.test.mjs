@@ -310,6 +310,83 @@ test('conferência: falha de rede mantém as paradas e avisa que não conferiu',
   assert.equal(r.paradas.length, 1);
 });
 
+// --------------------------------------------- áreas grandes demais
+
+// Área grande (~5 km de lado, contorno ~21 km): passa do orçamento do motor.
+const grande = () => area(quadrado(...rotaReal[500], 0.024), { id: 'grande', rotulo: 'Bairro inteiro' });
+// Motor falso: liga origem → pontos de passagem → destino em linha reta.
+const motorReto = (o, d) => async (vias) => {
+  const pontos = [o, ...vias, d];
+  return { pontos, km: C.comprimentoM(pontos) / 1000, min: 0 };
+};
+
+test('área grande: não cabe no motor e o veredito diz o motivo certo', () => {
+  const a = grande();
+  assert.ok(C.perimetroM(a.geometria) > C.LIMITES.orcamentoPerimetroM);
+  const pf = C.preFiltraAreas(rotaReal[0], rotaReal.at(-1), [a], { atingidasIds: [a.id] });
+  assert.equal(pf.enviadas.length, 0);
+  const v = C.montaVeredito({
+    origem: rotaReal[0], destino: rotaReal.at(-1),
+    base: { pontos: rotaReal, km: 32.6, min: 55 }, segura: null,
+    areas: [a], deixadasDeFora: pf.deixadasDeFora,
+  });
+  assert.equal(v.estado, C.ESTADO.SEM_ALTERNATIVA);
+  assert.equal(v.motivo.tipo, C.MOTIVO.GRANDE, 'não pode dizer "não há caminho" sem ter perguntado');
+  assert.equal(v.motivo.areas[0].id, a.id);
+});
+
+test('área grande: os dois lados do contorno ficam fora da área', () => {
+  const a = grande();
+  const lados = C.ladosDoContorno(a.geometria, rotaReal);
+  assert.equal(lados.length, 2);
+  for (const lado of lados) {
+    assert.ok(lado.length >= 3, `pontos: ${lado.length}`);
+    for (const p of lado) assert.ok(!C.pontoEmPoligono(p, a.geometria), 'ponto de passagem dentro da área');
+  }
+  // Um lado de cada: os pontos do meio ficam longe um do outro.
+  const meio = (l) => l[Math.floor(l.length / 2)];
+  assert.ok(C.haversineM(meio(lados[0]), meio(lados[1])) > 4000);
+});
+
+test('área grande: contorno por pontos acha caminho por fora e vira alternativa', async () => {
+  const a = grande();
+  const o = rotaReal[0], d = rotaReal.at(-1);
+  const r = await C.contornaAreasGrandes({ rota: { pontos: rotaReal, km: 32.6 }, grandes: [a], calcula: motorReto(o, d) });
+  assert.ok(r, 'deveria achar um lado');
+  assert.equal(C.rotaAtinge(r.rota.pontos, a), null);
+  const v = C.montaVeredito({
+    origem: o, destino: d, base: { pontos: rotaReal, km: 32.6, min: 55 },
+    segura: { ...r.rota, min: 70 }, areas: [a], deixadasDeFora: [a],
+  });
+  assert.equal(v.estado, C.ESTADO.COM_ALTERNATIVA);
+});
+
+test('área grande: se nenhum lado passa por fora, não inventa desvio', async () => {
+  const a = grande();
+  const r = await C.contornaAreasGrandes({
+    rota: { pontos: rotaReal, km: 32.6 }, grandes: [a],
+    calcula: async () => ({ pontos: rotaReal, km: 32.6 }), // motor sempre volta por dentro
+  });
+  assert.equal(r, null);
+});
+
+test('área grande: falha de rede não vira "não achei caminho"', async () => {
+  const r = await C.contornaAreasGrandes({
+    rota: { pontos: rotaReal, km: 32.6 }, grandes: [grande()],
+    calcula: async () => { throw Object.assign(new Error('ocupado'), { tipo: 'servidor' }); },
+  });
+  assert.equal(r.erro.tipo, 'servidor');
+});
+
+test('veredito: origem dentro da área explica o motivo', () => {
+  const o = rotaReal[0];
+  const v = C.montaVeredito({
+    origem: o, destino: rotaReal.at(-1), base: { pontos: rotaReal, km: 32.6, min: 55 }, segura: null,
+    areas: [area(quadrado(o[0], o[1], 0.003))],
+  });
+  assert.equal(v.motivo.tipo, C.MOTIVO.PONTA);
+});
+
 // ------------------------------------------------------------ deeplinks
 
 test('deeplink Maps leva waypoints; Waze não', () => {
