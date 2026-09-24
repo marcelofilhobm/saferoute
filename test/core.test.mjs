@@ -120,6 +120,13 @@ test('pré-filtro: prioriza área atingida e respeita orçamento de perímetro',
   assert.ok(deixadasDeFora.length > 0);
 });
 
+test('pré-filtro: área atingida fora do corredor também vai', () => {
+  const longe = area(quadrado(-23.08, -43.55, 0.003), { id: 'longe' }); // bem ao sul do corredor
+  assert.equal(C.preFiltraAreas(rotaReal[0], rotaReal.at(-1), [longe]).enviadas.length, 0);
+  const { enviadas } = C.preFiltraAreas(rotaReal[0], rotaReal.at(-1), [longe], { atingidasIds: ['longe'] });
+  assert.equal(enviadas[0]?.id, 'longe');
+});
+
 test('pré-filtro: área que contém a origem nunca é enviada', () => {
   const o = rotaReal[0];
   const { enviadas } = C.preFiltraAreas(o, rotaReal.at(-1), [area(quadrado(o[0], o[1], 0.003))]);
@@ -308,6 +315,74 @@ test('conferência: falha de rede mantém as paradas e avisa que não conferiu',
   });
   assert.equal(r.conferencia, C.CONFERENCIA.NAO_CONFERIDA);
   assert.equal(r.paradas.length, 1);
+});
+
+// ------------------------------------------------ busca em rodadas
+
+// Caso real do Marcelo (São Cristóvão → Campo Grande): o desvio da área da
+// rota direta sai do corredor e cai numa área que o motor não recebeu.
+function cenarioForaDoCorredor() {
+  const A = area(quadrado(...rotaReal[500], 0.003), { id: 'A' });
+  // Primeiro desvio: barriga ~6 km ao sul, fora do corredor de 5 km.
+  const desvio1 = comBarrigas(rotaReal, [[470, 530]], -0.055);
+  const B = area(quadrado(...desvio1[500], 0.003), { id: 'B' });
+  // Com B também excluída, o motor dá uma volta ainda maior.
+  const desvio2 = comBarrigas(rotaReal, [[470, 530]], -0.08);
+  return { A, B, desvio1, desvio2 };
+}
+
+test('busca: desvio que cai em área fora do corredor é recalculado com ela', async () => {
+  const { A, B, desvio1, desvio2 } = cenarioForaDoCorredor();
+  assert.equal(C.preFiltraAreas(rotaReal[0], rotaReal.at(-1), [A, B], { atingidasIds: ['A'] }).enviadas.length, 1, 'B fica fora do corredor');
+  const pedidos = [];
+  const r = await C.buscaDesvio({
+    origem: rotaReal[0], destino: rotaReal.at(-1), base: { pontos: rotaReal, km: 32.6 }, areas: [A, B],
+    calcula: async (excluir) => {
+      pedidos.push(excluir.map((a) => a.id).sort().join(','));
+      return excluir.some((a) => a.id === 'B') ? { pontos: desvio2, km: 60 } : { pontos: desvio1, km: 45 };
+    },
+  });
+  assert.deepEqual(pedidos, ['A', 'A,B']);
+  const v = C.montaVeredito({
+    origem: rotaReal[0], destino: rotaReal.at(-1), base: { pontos: rotaReal, km: 32.6, min: 55 },
+    segura: { ...r.segura, min: 90 }, areas: [A, B], deixadasDeFora: r.deixadasDeFora,
+  });
+  assert.equal(v.estado, C.ESTADO.COM_ALTERNATIVA, 'caminho maior, mas por fora das duas');
+});
+
+test('busca: sem caminho com a área nova, fica o desvio parcial', async () => {
+  const { A, B, desvio1 } = cenarioForaDoCorredor();
+  const r = await C.buscaDesvio({
+    origem: rotaReal[0], destino: rotaReal.at(-1), base: { pontos: rotaReal, km: 32.6 }, areas: [A, B],
+    calcula: async (excluir) => {
+      if (excluir.some((a) => a.id === 'B')) throw Object.assign(new Error('sem caminho'), { tipo: 'sem-caminho' });
+      return { pontos: desvio1, km: 45 };
+    },
+  });
+  assert.equal(r.erro, null);
+  assert.equal(C.rotaAtinge(r.segura.pontos, A), null);
+  assert.ok(C.rotaAtinge(r.segura.pontos, B));
+});
+
+test('busca: motor que insiste na mesma rota não prende o app em laço', async () => {
+  const { A, B, desvio1 } = cenarioForaDoCorredor();
+  let chamadas = 0;
+  const r = await C.buscaDesvio({
+    origem: rotaReal[0], destino: rotaReal.at(-1), base: { pontos: rotaReal, km: 32.6 }, areas: [A, B],
+    calcula: async () => { chamadas++; return { pontos: desvio1, km: 45 }; },
+  });
+  assert.ok(chamadas <= 3, `chamadas: ${chamadas}`);
+  assert.ok(r.segura);
+});
+
+test('busca: falha na primeira rodada vira erro, sem desvio inventado', async () => {
+  const { A } = cenarioForaDoCorredor();
+  const r = await C.buscaDesvio({
+    origem: rotaReal[0], destino: rotaReal.at(-1), base: { pontos: rotaReal, km: 32.6 }, areas: [A],
+    calcula: async () => { throw Object.assign(new Error('ocupado'), { tipo: 'servidor' }); },
+  });
+  assert.equal(r.segura, null);
+  assert.equal(r.erro.tipo, 'servidor');
 });
 
 // --------------------------------------------- áreas grandes demais

@@ -515,6 +515,10 @@ function notaConferencia(v) {
   const k = v.waypoints.length;
   const paradas = k === 0 ? '' : k === 1 ? 'pela parada A' : `pelas ${k} paradas (A a ${letraParada(k - 1)})`;
   const nota = (tipo, sig, texto) => `<div class="nota ${tipo}" style="margin-bottom:12px"><span class="sig">${sig}</span><span>${texto}</span></div>`;
+  if (c.conferencia === C.CONFERENCIA.CONFERIDA && v.estado === C.ESTADO.PARCIAL) {
+    // Parcial: a alternativa já atravessa alguma área — não dá para dizer "fora das suas áreas".
+    return nota('', '✓', `Conferido: ${k ? `passando ${paradas}, ` : ''}o caminho do Maps não entra em nenhuma área além das listadas acima. O Maps usa o trânsito e pode variar um pouco entre as paradas.`);
+  }
   if (c.conferencia === C.CONFERENCIA.CONFERIDA) {
     return nota('', '✓', k
       ? `Conferido: passando ${paradas}, o caminho mais curto fica fora das suas áreas. O Maps usa o trânsito e pode variar um pouco entre as paradas.`
@@ -657,31 +661,16 @@ async function verifica() {
     let erroSeg = null;
 
     if (atingBase.length) {
-      const pf = C.preFiltraAreas(o, d, areas, { atingidasIds: atingBase.map((a) => a.area.id) });
-      deixadasDeFora = pf.deixadasDeFora;
-      if (pf.enviadas.length) {
-        try {
-          segura = await calculaRota(o, d, pf.enviadas);
-        } catch (e) {
-          // A rota direta já está em mãos: qualquer falha no desvio vira
-          // "sem alternativa" com o motivo, em vez de perder o resultado.
-          erroSeg = e;
-        }
-      }
-      // Área grande demais para ir como exclusão: tenta dar a volta nela
-      // por pontos de passagem (decisão 019).
-      const grandes = pf.deixadasDeFora.filter((a) => C.rotaAtinge((segura || base).pontos, a));
-      if (grandes.length && !erroSeg) {
-        S.etapa = 'Procurando caminho em volta das áreas grandes';
-        render();
-        const r = await C.contornaAreasGrandes({
-          rota: segura || base, grandes,
-          calcula: (vias) => calculaRota(o, d, pf.enviadas, vias, 'through'),
-        });
-        if (r?.rota) segura = r.rota;
-        // Falha de rede/servidor não é "não achei caminho": o veredito diz que não conseguiu.
-        else if (r?.erro && (r.erro.tipo === 'rede' || r.erro.tipo === 'servidor')) erroSeg = r.erro;
-      }
+      // A rota direta já está em mãos: qualquer falha no desvio vira
+      // "sem alternativa" com o motivo, em vez de perder o resultado.
+      const r = await C.buscaDesvio({
+        origem: o, destino: d, base, areas,
+        calcula: (excluir, vias = [], tipo) => calculaRota(o, d, excluir, vias, tipo),
+        etapa: (texto) => { S.etapa = texto; render(); },
+      });
+      segura = r.segura;
+      erroSeg = r.erro;
+      deixadasDeFora = r.deixadasDeFora;
     }
 
     S.veredito = C.montaVeredito({ origem: o, destino: d, base, segura, areas, deixadasDeFora });

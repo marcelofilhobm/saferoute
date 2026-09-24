@@ -330,7 +330,8 @@ export function atingimentosDaRota(rota, areas) {
 // --------------------------------------------- 7.3 pré-filtro
 
 // OBRIGATÓRIO antes de montar a requisição. Prioridade:
-//   1. áreas que a rota base efetivamente cruza
+//   1. áreas que a rota efetivamente cruza (`atingidasIds`) — entram mesmo
+//      fora do corredor: um desvio pode sair dele e cair numa área
 //   2. áreas dentro do corredor origem-destino, por severidade
 // E cabe no orçamento de perímetro do Valhalla.
 // Devolve { enviadas, deixadasDeFora }.
@@ -347,7 +348,7 @@ export function preFiltraAreas(origem, destino, areas, { atingidasIds = [], folg
     .filter((a) => !areaExpirada(a))
     .filter((a) => a.geometria.length >= 3)
     .filter((a) => validaPoligono(a.geometria).erros.length === 0)
-    .filter((a) => bboxIntersecta(corredor, bbox(a.geometria)))
+    .filter((a) => ids.has(a.id) || bboxIntersecta(corredor, bbox(a.geometria)))
     // Área que contém a origem ou o destino não pode ser excluída —
     // o motor não teria como sair nem chegar.
     .filter((a) => !pontoEmPoligono(origem, a.geometria) && !pontoEmPoligono(destino, a.geometria));
@@ -657,6 +658,62 @@ export function montaVeredito({ origem, destino, base, segura, areas, deixadasDe
   }
   const motivo = motivoSemDesvio({ origem, destino, atingBase, deixadasDeFora, seguraCruzou: true });
   return { estado: ESTADO.SEM_ALTERNATIVA, base, segura: null, atingimentos: atingBase, restantes: atingBase, waypoints: [], deixadasDeFora, motivo };
+}
+
+// ---------------------------------------------- busca do desvio
+
+const metrosDentro = (rota, areas) => atingimentosDaRota(rota.pontos, areas).reduce((s, a) => s + a.metrosDentro, 0);
+
+// Pede o desvio ao motor em rodadas. Se a alternativa passa por uma área que
+// o motor não recebeu (fora do corredor, por exemplo), pede de novo com ela
+// junto — mesmo que o caminho fique bem maior (decisão 021). Depois, área
+// grande demais para ir como exclusão ganha o contorno por pontos.
+// `calcula(excluir, vias, tipo)` é injetada e devolve { pontos, km, min }.
+// Devolve { segura, erro, deixadasDeFora, rodadas }.
+export async function buscaDesvio({ origem, destino, base, areas, calcula, maxRodadas = 3, etapa = () => {} }) {
+  const ids = new Set(atingimentosDaRota(base.pontos, areas).map((at) => at.area.id));
+  let pf = preFiltraAreas(origem, destino, areas, { atingidasIds: [...ids] });
+  let segura = null;
+  let erro = null;
+  let rodadas = 0;
+  let enviadasNaUltima = null;
+  while (rodadas < maxRodadas && pf.enviadas.length) {
+    const chave = pf.enviadas.map((a) => a.id).sort().join('|');
+    if (chave === enviadasNaUltima) break; // nada novo para mandar
+    enviadasNaUltima = chave;
+    rodadas++;
+    let r;
+    try {
+      r = await calcula(pf.enviadas);
+    } catch (e) {
+      // Sem caminho com mais áreas: fica o desvio parcial da rodada anterior.
+      if (!segura) erro = e;
+      break;
+    }
+    if (!segura || metrosDentro(r, areas) < metrosDentro(segura, areas) ||
+        (metrosDentro(r, areas) === metrosDentro(segura, areas) && r.km < segura.km)) {
+      segura = r;
+    }
+    const novas = atingimentosDaRota(r.pontos, areas).map((at) => at.area.id).filter((id) => !ids.has(id));
+    if (!novas.length) break;
+    etapa('Recalculando para evitar também as áreas do desvio');
+    novas.forEach((id) => ids.add(id));
+    pf = preFiltraAreas(origem, destino, areas, { atingidasIds: [...ids] });
+  }
+
+  // Área grande demais para ir como exclusão: volta por pontos (decisão 019).
+  const grandes = pf.deixadasDeFora.filter((a) => rotaAtinge((segura || base).pontos, a));
+  if (grandes.length && !erro) {
+    etapa('Procurando caminho em volta das áreas grandes');
+    const r = await contornaAreasGrandes({
+      rota: segura || base, grandes,
+      calcula: (vias) => calcula(pf.enviadas, vias, 'through'),
+    });
+    if (r?.rota) segura = r.rota;
+    // Falha de rede/servidor não é "não achei caminho": o veredito diz que não conseguiu.
+    else if (r?.erro && (r.erro.tipo === 'rede' || r.erro.tipo === 'servidor')) erro = r.erro;
+  }
+  return { segura, erro, deixadasDeFora: pf.deixadasDeFora, rodadas };
 }
 
 // ------------------------------------------- áreas grandes demais
