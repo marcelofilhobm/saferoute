@@ -389,11 +389,32 @@ test('veredito: origem dentro da área explica o motivo', () => {
 
 // ------------------------------------------------------------ deeplinks
 
-test('deeplink Maps leva waypoints; Waze não', () => {
+test('deeplink Maps leva waypoints', () => {
   const m = C.deeplinkMaps([-22.93, -43.57], [-22.97, -43.40], [[-22.95, -43.5]]);
   assert.match(m, /api=1/);
   assert.match(m, /waypoints=/);
-  assert.doesNotMatch(C.deeplinkWaze([-22.97, -43.40]), /waypoints/);
+  assert.equal(C.deeplinkWaze, undefined, 'Waze saiu: levaria por rota não conferida');
+});
+
+test('sem desvio, o link do Maps vai preso ao trajeto conferido, em vértices reais', () => {
+  const pts = C.pontosDaRota(rotaReal);
+  assert.equal(pts.length, 3);
+  for (const p of pts) assert.ok(rotaReal.includes(p), 'ponto fora dos vértices da rota');
+  const i = pts.map((p) => rotaReal.indexOf(p));
+  assert.ok(i[0] < i[1] && i[1] < i[2], 'fora de ordem');
+  assert.match(C.deeplinkMaps(rotaReal[0], rotaReal.at(-1), pts), /waypoints=/);
+});
+
+test('paradas do desvio são vértices reais da rota segura', async () => {
+  const faixas = [[470, 530], [580, 640]];
+  const segura = comBarrigas(rotaReal, faixas);
+  const r = await C.refinaParadas({
+    segura: { pontos: segura }, base: { pontos: rotaReal },
+    areas: [area(quadrado(...rotaReal[500], 0.003)), area(quadrado(...rotaReal[610], 0.002))],
+    simula: simuladorQueCorta(segura, rotaReal, faixas),
+  });
+  assert.ok(r.paradas.length >= 2);
+  for (const p of r.paradas) assert.ok(segura.includes(p), 'parada entre vértices');
 });
 
 // ---------------------------------------------------------- vocabulário

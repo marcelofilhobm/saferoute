@@ -260,6 +260,7 @@ Ideias boas que **não entram agora**. Existem aqui para não ficarem soltas na 
 | **Verificação de ponto** | Colar um endereço e responder se ele cai dentro de alguma área evitada. Sem rota, sem ORS, sem cota, offline | Botão a mais na Fase 2 | Quase zero — o código de ponto-em-polígono já existe na Fase 1 |
 | Comparação por horário | Mesma rota, horários diferentes, usando o timestamp das ocorrências | Fase 4+ | Médio, depende de volume de dados |
 | Publicação de camadas | Seguir criadores, assinar camadas de terceiros | Fase 6+ | Alto — exige servidor, conta de usuário e as regras de 2.1 |
+| Waze em duas etapas | O Waze só aceita destino: navegar primeiro até o ponto do desvio, depois até o destino (decisão 020) | Só se muita gente pedir Waze | Baixo no código, alto no uso — duas navegações por viagem |
 
 **Regra:** item do backlog só é promovido quando a fase atual estiver fechada e usada por duas semanas. A verificação de ponto é a candidata mais provável a subir logo depois da Fase 2.
 

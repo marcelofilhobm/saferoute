@@ -71,7 +71,6 @@ const IC = {
   alvo: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="2.2" fill="currentColor"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>',
   pino: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s-7-6.2-7-11.5A7 7 0 0 1 19 9.5C19 14.8 12 21 12 21z"/><circle cx="12" cy="9.5" r="2.5"/></svg>',
   seta: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l19-9-9 19-2-8-8-2z"/></svg>',
-  waze: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>',
   lupa: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>',
   olho: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>',
   olhoFechado: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3l18 18M10.6 5.1A10 10 0 0 1 12 5c6.4 0 10 7 10 7a17 17 0 0 1-3.2 4.1M6.6 6.6A17 17 0 0 0 2 12s3.6 7 10 7a9.6 9.6 0 0 0 5.4-1.6"/></svg>',
@@ -539,12 +538,9 @@ function telaVeredito() {
   const avisoPonta = noOrigemOuDestino
     ? '<div class="nota aviso" style="margin-bottom:12px"><span class="sig">i</span><span>Sua origem ou seu destino fica dentro de uma área que você evita — esse trecho não tem como ser contornado.</span></div>'
     : '';
-  const mapsBase = C.deeplinkMaps(S.origem.ponto, S.destino.ponto);
-  const waze = C.deeplinkWaze(S.destino.ponto);
+  // Todo link para o Maps vai preso ao trajeto que o app conferiu (decisão 020).
+  const mapsBase = C.deeplinkMaps(S.origem.ponto, S.destino.ponto, C.pontosDaRota(v.base.pontos));
   const botaoNova = '<button class="btn btn-sec" id="nova" type="button">Nova verificação</button>';
-  const wazeBloco = `
-    <a class="btn btn-sec" href="${esc(waze)}" target="_blank" rel="noopener">${IC.waze}Abrir no Waze</a>
-    <p class="aviso-waze"><span>!</span><span>${esc(C.AVISO_WAZE)}</span></p>`;
 
   let html = '';
   if (v.estado === C.ESTADO.LIMPA) {
@@ -585,7 +581,6 @@ function telaVeredito() {
       ${notaMaps}
       <div class="pilha">
         <a class="btn btn-pri" href="${esc(mapsDesvio)}" target="_blank" rel="noopener">${IC.seta}Navegar por fora no Google Maps</a>
-        ${wazeBloco}
         ${botaoNova}
       </div>`;
   } else {
