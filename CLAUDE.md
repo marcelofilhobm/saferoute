@@ -26,7 +26,7 @@ js/core.js     ← núcleo: sem DOM, sem rede. Toda regra de decisão mora aqui.
 js/rede.js     ← tudo que sai do aparelho
 js/guarda.js   ← persistência local
 js/app.js      ← interface
-test/core.test.mjs   ← 36 testes (node --test), fixtures reais do Rio
+test/core.test.mjs   ← 38 testes (node --test), fixtures reais do Rio
 test/fumaca.mjs      ← teste de ponta a ponta em Chromium com rede simulada
 docs/          ← plano, custos, decisões
 ```
@@ -89,6 +89,6 @@ Duas regras a fazer valer mesmo se ele esquecer:
 
 ## Estado atual
 
-- App completo e testado: verificar rota, desenhar área, veredito (limpa / alternativa / parcial / sem desvio), handoff Maps com waypoints e Waze com aviso, importar e compartilhar áreas, share target, funciona instalado.
+- App completo e testado: verificar rota, desenhar área, veredito (limpa / alternativa / parcial / sem desvio), handoff Maps sempre preso ao trajeto conferido (sem Waze — decisão 020), importar e compartilhar áreas, share target, funciona instalado.
 - **Pendente de verificação no mundo real:** se o Valhalla público respeita `exclude_polygons` na geometria do Rio (portão da Fase 0). A primeira rota real com área no caminho responde isso — se o veredito vier "sem desvio" em toda rota que obviamente tem desvio, o motor está ignorando o polígono.
 - **Pendências conhecidas:** link curto `maps.app.goo.gl` (precisa de Worker); Valhalla público não serve para escala; ícone e nome são provisórios.

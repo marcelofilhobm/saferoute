@@ -146,7 +146,7 @@ ok('paradas aparecem no mapa com letras', (await page.locator('.parada').count()
 ok('caminho do Maps conferido', await page.isVisible('text=Conferido'));
 const conf = pedidos.find((p) => p.locations.length > 2);
 ok('conferência manda paradas como parada, sem áreas', !!conf && conf.locations.slice(1, -1).every((l) => l.type === 'break') && !conf.exclude_polygons);
-ok('aviso do Waze aparece', await page.isVisible('text=O Waze não aceita desvio por área'));
+ok('Waze saiu da tela', !(await page.textContent('#folha')).includes('Waze'));
 ok('área própria chamada de "área que eu evito" ou rótulo', !(await page.textContent('#folha')).toLowerCase().includes('área de risco'));
 const excl = pedidos.find((p) => p.exclude_polygons);
 ok('motor recebeu exclude_polygons', !!excl);
@@ -162,6 +162,8 @@ await page.waitForSelector('text=Não achei caminho por fora', { timeout: 15000 
 await mapaOcioso();
 await page.screenshot({ path: `${SAIDA}03-veredito-sem-desvio.png` });
 ok('estado sem desvio', true);
+const hrefAssim = await page.getAttribute('a:has-text("Seguir assim mesmo")', 'href');
+ok('"Seguir assim mesmo" vai preso ao trajeto', /waypoints=/.test(hrefAssim || ''));
 modoMotor = 'normal';
 
 // 4. Desenhar área

@@ -394,12 +394,43 @@ const PASSO_AMOSTRA_M = 150;
 const MIN_AFASTAMENTO_M = 120;
 const FOLGA_PONTA_M = 200;    // parada colada na origem, destino ou noutra parada não serve
 
-// Amostras da rota segura com a distância acumulada (s, em metros).
+// Amostras da rota segura com a distância acumulada (s, em metros) e, para
+// cada amostra, o vértice real da rota mais perto dela. A parada que vai
+// para o Maps é sempre o vértice: amostra cai entre dois vértices e, em via
+// expressa com curva, pode ficar fora da pista; o vértice está na rua.
 function trilho(rota) {
-  const pts = amostraAoLongo(rota, PASSO_AMOSTRA_M);
+  const pts = [];
+  const vert = [];
+  for (let i = 0; i < rota.length - 1; i++) {
+    const a = rota[i], b = rota[i + 1];
+    const n = Math.max(1, Math.floor(haversineM(a, b) / PASSO_AMOSTRA_M));
+    for (let j = 0; j < n; j++) {
+      const t = j / n;
+      pts.push([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]);
+      vert.push(t < 0.5 ? a : b);
+    }
+  }
+  pts.push(rota.at(-1));
+  vert.push(rota.at(-1));
   const s = [0];
   for (let i = 1; i < pts.length; i++) s.push(s[i - 1] + haversineM(pts[i - 1], pts[i]));
-  return { pts, s, total: s.at(-1) };
+  return { pts, vert, s, total: s.at(-1) };
+}
+
+// Pontos do próprio trajeto (vértices reais) para prender o Maps a ele
+// quando não há desvio: sem parada, o Maps escolheria outra rota, que o app
+// não conferiu (decisão 020).
+export function pontosDaRota(rota, n = 3) {
+  if (rota.length < 2) return [];
+  const t = trilho(rota);
+  const out = [];
+  for (let k = 1; k <= n; k++) {
+    const alvo = (t.total * k) / (n + 1);
+    const i = t.s.findIndex((s) => s >= alvo);
+    const v = t.vert[i < 0 ? t.vert.length - 1 : i];
+    if (!out.includes(v)) out.push(v);
+  }
+  return out;
 }
 
 const RAIO_RETORNO_M = 1000;
@@ -444,7 +475,7 @@ export function ancorasIniciais(rotaSegura, rotaBase, { max = MAX_PARADAS, minAf
     .sort((a, b) => b.d - a.d)
     .slice(0, max)
     .sort((a, b) => a.i - b.i);
-  return usados.map(({ i }) => ({ ponto: t.pts[i], s: t.s[i], s0: t.s[i] }));
+  return usados.map(({ i }) => ({ ponto: t.vert[i], s: t.s[i], s0: t.s[i] }));
 }
 
 export function extraiWaypoints(rotaSegura, rotaBase, opts) {
@@ -483,7 +514,7 @@ export function avaliaSimulacao({ segura, ancoras, simulada, areas, max = MAX_PA
         const d = distAteLinha(t.pts[i], ref);
         if (!melhor || d > melhor.d) melhor = { i, d };
       }
-      if (melhor && melhor.d > 25) novas.push({ ponto: t.pts[melhor.i], s: t.s[melhor.i], s0: t.s[melhor.i] });
+      if (melhor && melhor.d > 25) novas.push({ ponto: t.vert[melhor.i], s: t.s[melhor.i], s0: t.s[melhor.i] });
     });
   }
 
@@ -506,7 +537,7 @@ export function avaliaSimulacao({ segura, ancoras, simulada, areas, max = MAX_PA
       if (alvo == null || alvo <= cortes[j] + FOLGA_PONTA_M || alvo >= cortes[j + 2] - FOLGA_PONTA_M) continue;
       let i = t.s.findIndex((s) => s >= alvo);
       if (i < 0) i = t.pts.length - 1;
-      movidas[j] = { ponto: t.pts[i], s: t.s[i], s0: a.s0 };
+      movidas[j] = { ponto: t.vert[i], s: t.s[i], s0: a.s0 };
     }
   }
 
@@ -568,13 +599,8 @@ export function deeplinkMaps(origem, destino, waypoints = [], modal = 'driving')
   return url + `&travelmode=${modal}&dir_action=navigate`;
 }
 
-// Waze NÃO aceita waypoints: o desvio se perde. A interface avisa.
-export function deeplinkWaze(destino) {
-  return `https://www.waze.com/ul?ll=${encodeURIComponent(fmt(destino))}&navigate=yes`;
-}
-
-export const AVISO_WAZE =
-  'O Waze não aceita desvio por área. Ele vai traçar a rota dele, que pode passar pelas áreas que você evita.';
+// Sem Waze: ele só aceita destino, então levaria a pessoa por uma rota que o
+// app não conferiu (decisão 020).
 
 // ---------------------------------------------------- veredito
 

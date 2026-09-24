@@ -98,3 +98,8 @@ Descartado: aumentar o número de pontos sem conferir (mais paradas, mais retorn
 Área que não cabe no orçamento de perímetro do Valhalla (9,5 km somados) não vai como exclusão. O app agora tenta dar a volta nela pelos dois lados, com pontos de passagem nos cantos do casco convexo folgado em 300 m (`ladosDoContorno`, tipo `through`), e fica com o lado mais curto que passa por fora — conferido no aparelho como qualquer desvio. Até 2 áreas grandes por verificação, 2 pedidos cada.
 Motivo: teste real do Marcelo — área grande no caminho, e o veredito dizia "não há caminho por fora" sem nunca ter perguntado ao motor. Agora o veredito diz o motivo de verdade (`MOTIVO`: área grande, origem/destino dentro, motor devolveu por dentro, motor sem caminho, falha de rede).
 Descartado: ORS com chave (aceita áreas grandes, mas exige conta e proxy — volta junto com a decisão 015); cortar a área em pedaços (a soma dos perímetros só aumenta).
+
+### 020 — Sem Waze; todo link do Maps preso ao trajeto conferido
+O botão do Waze saiu: o Waze só aceita destino, então levava a pessoa por uma rota que o app não conferiu — o aviso em letra pequena não resolvia. E todo link para o Maps agora leva pontos do trajeto conferido: as paradas do desvio ou, sem desvio ("Nada no caminho", "Seguir assim mesmo"), três pontos da própria rota. Toda parada é um vértice real da rota, nunca um ponto entre vértices (em via expressa eles ficam longe e o ponto do meio pode cair fora da pista).
+Motivo: conversa com o Marcelo (24/09/2026) — o que o app conferiu tem que ser o que a pessoa dirige.
+Descartado: manter o Waze com aviso; navegação em duas etapas no Waze (até o desvio, depois até o destino) — ficou no backlog, 8.1.
