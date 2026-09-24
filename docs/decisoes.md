@@ -103,3 +103,8 @@ Descartado: ORS com chave (aceita áreas grandes, mas exige conta e proxy — vo
 O botão do Waze saiu: o Waze só aceita destino, então levava a pessoa por uma rota que o app não conferiu — o aviso em letra pequena não resolvia. E todo link para o Maps agora leva pontos do trajeto conferido: as paradas do desvio ou, sem desvio ("Nada no caminho", "Seguir assim mesmo"), três pontos da própria rota. Toda parada é um vértice real da rota, nunca um ponto entre vértices (em via expressa eles ficam longe e o ponto do meio pode cair fora da pista).
 Motivo: conversa com o Marcelo (24/09/2026) — o que o app conferiu tem que ser o que a pessoa dirige.
 Descartado: manter o Waze com aviso; navegação em duas etapas no Waze (até o desvio, depois até o destino) — ficou no backlog, 8.1.
+
+### 021 — Desvio em rodadas: área que o desvio atravessa entra no próximo pedido
+O pré-filtro só mandava ao motor as áreas que a rota direta cruza e as do corredor origem-destino (±5 km). Se o desvio saía do corredor e passava por outra área, o app só marcava "desvia de parte". Agora `buscaDesvio` pede de novo com essa área junto (até 3 rodadas), mesmo que o caminho fique bem maior, e fica com a rodada que passa menos por dentro. Área atingida entra no pedido mesmo fora do corredor.
+Motivo: teste real do Marcelo (24/09/2026), São Cristóvão → Campo Grande: o desvio foi pelo litoral e atravessou a área da Estrada do Mato Alto, que estava fora do corredor e nunca foi enviada; havia caminho por fora (Estrada da Magarça). A nota "Conferido" no desvio parcial também dizia "fora das suas áreas" — corrigida.
+Descartado: aumentar o corredor (manda área à toa e gasta o orçamento de perímetro de 9,5 km); mandar todas as áreas sempre (mesmo problema).

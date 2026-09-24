@@ -23,7 +23,7 @@ python3 -m http.server 8765
 Testes:
 
 ```
-node --test test/core.test.mjs     # núcleo, 38 testes
+node --test test/core.test.mjs     # núcleo, 43 testes
 node test/fumaca.mjs               # ponta a ponta em Chromium (precisa de playwright-core)
 ```
 

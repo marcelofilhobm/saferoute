@@ -43,7 +43,12 @@ function encode(pts, prec = 6) {
 const desvio = rotaReal.map((p, i) => (i > 300 && i < 400 ? [p[0] + 0.012, p[1]] : p));
 const shapeDesvio = encode(desvio);
 
-let modoMotor = 'normal'; // normal | sem-caminho | grande-falha
+let modoMotor = 'normal'; // normal | sem-caminho | grande-falha | fora-corredor
+// Caso real (São Cristóvão → Campo Grande): o desvio sai do corredor e cai numa
+// área que o motor não recebeu; com ela junto, o motor dá uma volta maior.
+const barriga = (dLat) => rotaReal.map((p, i) => (i > 470 && i < 530 ? [p[0] + dLat, p[1]] : p));
+const desvioSul = barriga(-0.055);
+const desvioSul2 = barriga(-0.08);
 const pedidos = [];
 let ultimaSegura = desvio; // o que o motor devolveu por último como desvio
 
@@ -77,6 +82,10 @@ function respostaValhalla(url) {
     };
     const cortes = [0, ...meio.map(perto), rota.length - 1];
     return resposta(cortes.slice(1).map((j, k) => perna(rota.slice(cortes[k], j + 1))));
+  }
+  if (excl && modoMotor === 'fora-corredor') {
+    ultimaSegura = q.exclude_polygons.length > 1 ? desvioSul2 : desvioSul;
+    return resposta([perna(ultimaSegura)], q.exclude_polygons.length > 1 ? 60 : 45);
   }
   if (excl) ultimaSegura = desvio;
   const shape = excl ? shapeDesvio : shapeReal;
@@ -228,7 +237,8 @@ await page.goto(`${BASE}?text=${encodeURIComponent(URL_REAL)}`);
 await page.waitForSelector('#folha .selo', { timeout: 15000 });
 await mapaOcioso();
 await page.screenshot({ path: `${SAIDA}09-area-grande.png` });
-ok('área grande: acha desvio por pontos de passagem', await page.isVisible('text=Dá para desviar'), await page.textContent('#folha .titulo'));
+const tituloGrande = (await page.textContent('#folha .titulo')).trim();
+ok('área grande: acha desvio por pontos de passagem', tituloGrande === 'Dá para desviar', tituloGrande);
 ok('área grande: nunca vai como exclusão', pedidos.every((p) => !p.exclude_polygons));
 ok('área grande: pediu pontos de passagem', pedidos.some((p) => p.locations.some((l) => l.type === 'through')));
 
@@ -240,14 +250,29 @@ const sub = await page.textContent('#folha .sub');
 ok('área grande sem desvio: diz o motivo de verdade', /grande demais/.test(sub) && !/Não há caminho/.test(sub), sub.slice(0, 80));
 modoMotor = 'normal';
 
-// 10. Tema escuro não quebra
+// 10. Área fora do corredor atingida pelo desvio → nova rodada com ela
+const quadradoEm = (p, d, id, rotulo) => ({ id, rotulo, escopo: 'privada', severidade: 1, criadaEm: new Date().toISOString(),
+  geometria: [[p[0] - d, p[1] - d], [p[0] - d, p[1] + d], [p[0] + d, p[1] + d], [p[0] + d, p[1] - d]] });
+await page.evaluate((as) => localStorage.setItem('contorno.v1', JSON.stringify({ areas: as, exemploCarregado: true })),
+  [quadradoEm(rotaReal[500], 0.003, 'A', 'Teste 1'), quadradoEm(desvioSul[500], 0.003, 'B', 'Teste 3')]);
+modoMotor = 'fora-corredor';
+pedidos.length = 0;
+await page.goto(`${BASE}?text=${encodeURIComponent(URL_REAL)}`);
+await page.waitForSelector('#folha .selo', { timeout: 15000 });
+const exclusoes = pedidos.filter((p) => p.exclude_polygons).map((p) => p.exclude_polygons.length);
+ok('desvio fora do corredor: pede de novo com a área nova', exclusoes.join(',') === '1,2', exclusoes.join(','));
+const tituloCorredor = (await page.textContent('#folha .titulo')).trim();
+ok('desvio fora do corredor: acha caminho por fora das duas', tituloCorredor === 'Dá para desviar', tituloCorredor);
+modoMotor = 'normal';
+
+// 11. Tema escuro não quebra
 await page.emulateMedia({ colorScheme: 'dark' });
 await page.goto(BASE);
 await page.waitForSelector('#folha .rotulo-sec');
 await page.waitForTimeout(500);
 await page.screenshot({ path: `${SAIDA}07-escuro.png` });
 
-// 11. Largura de desktop
+// 12. Largura de desktop
 await page.setViewportSize({ width: 1280, height: 800 });
 await page.emulateMedia({ colorScheme: 'light' });
 await page.goto(`${BASE}?text=${encodeURIComponent(URL_REAL)}`);
